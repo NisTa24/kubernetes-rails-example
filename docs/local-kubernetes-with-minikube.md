@@ -78,6 +78,8 @@ minikube image load nista24/kubernetes-rails-example:latest
 
 Then set `imagePullPolicy: IfNotPresent` (or `Never`) on the container in your Deployment, so Kubernetes uses the loaded image instead of pulling it.
 
+> **Note:** this project's manifests now use `imagePullPolicy: Always` with `:latest`, so Option A (push to Docker Hub) is required. See [updating-the-deployment.md](updating-the-deployment.md#deploying-new-code) for how to deploy new code and a comparison of `:latest` and versioned tags.
+
 ### Registry secret (only for private Docker Hub repositories)
 
 If the repository on Docker Hub is **private**, Kubernetes needs credentials to pull the image. You don't need this if the repository is public, or if you use Option B.
@@ -277,7 +279,7 @@ spec:
       containers:
       - name: rails-app
         image: nista24/kubernetes-rails-example:latest
-        imagePullPolicy: IfNotPresent # use an image loaded with `minikube image load` if present
+        imagePullPolicy: Always       # pull the newest :latest from Docker Hub on each pod start
         ports:
         - containerPort: 80
         env:

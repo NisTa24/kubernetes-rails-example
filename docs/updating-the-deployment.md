@@ -25,7 +25,8 @@ kubectl apply -f config/kube --dry-run=server
 | Deployment file (e.g. adding `envFrom`) | Yes, new pods roll out | `kubectl apply -f config/kube` |
 | **Only the ConfigMap values** | **No.** Pods read env vars only when they start | `apply`, then `kubectl rollout restart deployment kubernetes-rails-example-deployment` |
 | Secret values | No | Same as the ConfigMap row |
-| New app code / image | No, see [Deploying new code](#deploying-new-code) | Rebuild, push, then roll out |
+| New app code / image (`:latest`) | No, see [Deploying new code](#deploying-new-code) | Rebuild, push, `apply`, then `kubectl rollout restart deployment kubernetes-rails-example-deployment sidekiq` |
+| New image tag in the manifests (`v2`) | Yes | Rebuild, push, `kubectl apply -f config/kube` |
 
 ## Using a ConfigMap for environment variables
 
@@ -65,14 +66,13 @@ strict decoding error: unknown field "spec.template.spec.containers[0].envFrom[0
 
 ### Pitfall: `DATABASE_URL` / `REDIS_URL`
 
-The app uses **SQLite** and only has the `sqlite3` gem. If you set `DATABASE_URL` to a `postgresql://...` URL, Rails tries to load the Postgres adapter on boot and every pod crashes (`CrashLoopBackOff`). Keep these commented out until you've:
+The app uses **SQLite** and only has the `sqlite3` gem. If you set `DATABASE_URL` to a `postgresql://...` URL, Rails tries to load the Postgres adapter on boot and every pod crashes (`CrashLoopBackOff`). Keep it commented out until you've added the `pg` gem, rebuilt the image, and deployed Postgres to the cluster.
 
-1. added the `pg` gem and rebuilt the image,
-2. deployed Postgres (and Redis, for `REDIS_URL`) to the cluster.
+`REDIS_URL` only works once Redis is running in the cluster. It's now deployed by `config/kube/redis.yml` (see [troubleshooting-sidekiq.md](troubleshooting-sidekiq.md#3-crashloopbackoff-redis-connection-refused)), so it's enabled:
 
 ```yaml
   # DATABASE_URL: postgresql://example.com/mydb
-  # REDIS_URL: redis://redis.default.svc.cluster.local:6379/
+  REDIS_URL: redis://redis.default.svc.cluster.local:6379/
 ```
 
 ### ConfigMap vs Secret
@@ -81,24 +81,79 @@ Use a ConfigMap for plain settings. Values like `RAILS_MASTER_KEY` or database p
 
 ## Deploying new code
 
-The Deployment uses `imagePullPolicy: IfNotPresent`. **Once minikube has a copy of `:latest`, it won't pull your newer push**, so `rollout restart` would start the old code again.
+**Current setup:** both `config/kube/deployment.yml` (web) and `config/kube/sidekiq.yml` use `nista24/kubernetes-rails-example:latest` with `imagePullPolicy: Always`.
 
-Use a new tag for each build instead:
+Whenever you change the app's code or `Gemfile`, you **must rebuild and push the image**. The cluster only runs what's on Docker Hub, not your local files.
+
+### Workflow with `:latest` (current setup)
+
+```sh
+docker build -t nista24/kubernetes-rails-example:latest .
+docker push nista24/kubernetes-rails-example:latest
+kubectl apply -f config/kube
+kubectl rollout restart deployment kubernetes-rails-example-deployment sidekiq
+kubectl get pods -w
+```
+
+`apply` alone doesn't pick up the new image: the manifest still says `:latest`, so from Kubernetes' point of view nothing changed. `rollout restart` creates new pods, and with `Always`, each new pod pulls the newest `:latest` from Docker Hub.
+
+### How `imagePullPolicy` works
+
+| Policy | What happens when a pod starts | Effect with `:latest` |
+|---|---|---|
+| `Always` | Checks the registry and pulls if the image has changed | Gets the newest push, **as long as the pods are restarted** |
+| `IfNotPresent` | Uses the node's copy if it has one; pulls only if missing | **Keeps running the old image** after a new push. The events show `Container image "...:latest" already present on machine` |
+| `Never` | Only uses the node's copy, never pulls | Only works with images put on the node by hand (`minikube image load`) |
+
+If you don't set `imagePullPolicy`, Kubernetes defaults to `Always` for `:latest` (or no tag) and `IfNotPresent` for any other tag.
+
+With `Always`, `minikube image load` doesn't help, because the cluster pulls from Docker Hub every time a pod starts. Always push.
+
+### `:latest` vs versioned tags (`v1`, `v2`, ...)
+
+A tag is only a name. Kubernetes has no way to know that `:latest` now points to a different image than before.
+
+| | `:latest` + `Always` | Versioned tags (`v2`, `v3`, ...) |
+|---|---|---|
+| Deploy a new build | Build, push, `apply`, **then `rollout restart`** | Build, push, change the tag in the manifests, `apply` |
+| Rollout triggered by `apply`? | No, the manifest doesn't change | Yes, the tag change triggers it |
+| See which version is running | Hard: every pod says `:latest` | Easy: `kubectl describe pod` shows `v2` |
+| Rollback (`kubectl rollout undo`) | Doesn't really work: the "previous" version is also `:latest`, which now points to the new code | Works: goes back to the previous tag |
+| All pods run the same code? | Not guaranteed: pods started at different times can pull different images | Yes |
+| Pull on every pod start | Yes (slower startup, needs Docker Hub access) | Only when the node doesn't have the tag yet |
+| Good for | Local learning, quick experiments | Anything shared, staging, production |
+
+### Workflow with versioned tags
 
 ```sh
 docker build -t nista24/kubernetes-rails-example:v2 .
 docker push nista24/kubernetes-rails-example:v2
-kubectl set image deployment/kubernetes-rails-example-deployment \
-  rails-app=nista24/kubernetes-rails-example:v2
-kubectl rollout status deployment kubernetes-rails-example-deployment
 ```
 
-If you prefer, update the `image:` tag in `config/kube/deployment.yml` and run `kubectl apply -f config/kube` instead. That keeps the file in sync with what's running. Either way, Kubernetes rolls out the new pods.
+Change `image:` to `nista24/kubernetes-rails-example:v2` in **both** `config/kube/deployment.yml` and `config/kube/sidekiq.yml`, then:
 
-Alternatives:
+```sh
+kubectl apply -f config/kube
+kubectl rollout status deployment kubernetes-rails-example-deployment
+kubectl rollout status deployment sidekiq
+```
 
-- **Keep using `:latest`:** set `imagePullPolicy: Always`, then run `kubectl rollout restart deployment kubernetes-rails-example-deployment` after each push.
-- **Skip Docker Hub:** build, then `minikube image load nista24/kubernetes-rails-example:v2`, and use that tag in the Deployment.
+No `rollout restart` is needed, since the changed tag triggers the rollout. With versioned tags you can switch back to `imagePullPolicy: IfNotPresent` to avoid pulling on every start.
+
+You can also change the image without editing the files, but then the manifests no longer match what's running:
+
+```sh
+kubectl set image deployment/kubernetes-rails-example-deployment rails-app=nista24/kubernetes-rails-example:v2
+kubectl set image deployment/sidekiq sidekiq=nista24/kubernetes-rails-example:v2
+```
+
+### Check the image before deploying
+
+For example, to confirm a new build contains Sidekiq:
+
+```sh
+docker run --rm --entrypoint bundle nista24/kubernetes-rails-example:latest exec sidekiq --version
+```
 
 ## Rolling back
 
