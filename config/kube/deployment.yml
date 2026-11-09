@@ -20,7 +20,7 @@ spec:
         envFrom:
           - configMapRef:
               name: env
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
         env:

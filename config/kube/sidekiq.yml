@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sidekiq
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sidekiq
+  template:
+    metadata:
+      labels:
+        app: sidekiq
+    spec:
+      imagePullSecrets:
+      - name: my-docker-secret
+      containers:
+      - name: sidekiq
+        image: nista24/kubernetes-rails-example:latest
+        imagePullPolicy: Always
+        command: ["bundle", "exec", "sidekiq"]
+        envFrom:
+          - configMapRef:
+              name: env          # includes REDIS_URL
+        env:
+        - name: RAILS_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: rails-secrets
+              key: RAILS_MASTER_KEY
