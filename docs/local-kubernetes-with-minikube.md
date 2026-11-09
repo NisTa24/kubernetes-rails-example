@@ -251,7 +251,7 @@ If every pod is `Running` and you still get this error, check the ports in the n
 
 ### Pods are `Running` but the app isn't reachable
 
-The ports don't match. The container listens on **80** (Thruster), so `containerPort` and the Service's `targetPort` must both be `80`, not `3000`.
+The ports don't match. The container listens on **80** (Thruster), so `containerPort` and the Service's `targetPort` must both be `80`, not `3000`. See [kubernetes-ports-explained.md](kubernetes-ports-explained.md) for how the ports fit together.
 
 ### Working manifests
 
