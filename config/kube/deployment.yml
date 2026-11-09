@@ -17,6 +17,9 @@ spec:
       containers:
       - name: rails-app
         image: nista24/kubernetes-rails-example:latest
+        envFrom:
+          - configMapRef:
+              name: env
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 80
