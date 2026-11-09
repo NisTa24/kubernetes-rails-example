@@ -123,6 +123,8 @@ A tag is only a name. Kubernetes has no way to know that `:latest` now points to
 | Pull on every pod start | Yes (slower startup, needs Docker Hub access) | Only when the node doesn't have the tag yet |
 | Good for | Local learning, quick experiments | Anything shared, staging, production |
 
+See [why-not-latest-image-tag.md](why-not-latest-image-tag.md) for more on the risks of `:latest`, including migrations.
+
 ### Workflow with versioned tags
 
 ```sh
